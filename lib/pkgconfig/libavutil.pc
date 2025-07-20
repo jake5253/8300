@@ -1,0 +1,14 @@
+prefix=/hudson/build/dallas/output/production/ffmpeg/install/
+exec_prefix=${prefix}
+libdir=/hudson/build/dallas/output/production/ffmpeg/install/lib
+includedir=/hudson/build/dallas/output/production/ffmpeg/install/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 54.27.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil 
+Libs.private: -lm
+Cflags: -I${includedir}

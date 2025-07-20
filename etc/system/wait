@@ -1,0 +1,516 @@
+#!/bin/sh
+
+#------------------------------------------------------------------
+# © 2013 Belkin International, Inc. and/or its affiliates. All rights reserved.
+#------------------------------------------------------------------
+
+
+#------------------------------------------------------------------
+#  This file contains the code run by init process during the wait target
+#  It starts the sysevent daemon, and then runs through all of the sysevent
+#  registration scripts
+#------------------------------------------------------------------
+init_hotplug2() {
+    [ -c /dev/console ] || mknod /dev/console c 5 1
+    /sbin/hotplug2 --set-worker /lib/hotplug2/worker_fork.so --set-rules-file /etc/hotplug2-init.rules --no-persistent --set-coldplug-cmd /sbin/udevtrigger
+    /sbin/hotplug2 --set-worker /lib/hotplug2/worker_fork.so --set-rules-file /etc/hotplug2-init.rules --persistent &
+}
+
+find_mtd_part() {
+        local PART="$(grep "\"$1\"" /proc/mtd | awk -F: '{print $1}')"
+        local PREFIX=/dev/mtdblock
+
+        PART="${PART##mtd}"
+        [ -d /dev/mtdblock ] && PREFIX=/dev/mtdblock/
+        echo "${PART:+$PREFIX$PART}"
+}
+
+# case #02421864
+# qca_edma_smp_affinity is used to balancing network interrputs to multiple cpu cores
+# with the default config, all traffic are led to core 0 which causes low throughput issue
+
+qca_edma_smp_affinity()
+{
+    for tx_irq_q0_q3 in 0 1 2 3
+	do
+		tx_irq_num=`grep -m1 edma_eth_tx$tx_irq_q0_q3 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$tx_irq_num" ] && echo 4 > /proc/irq/$tx_irq_num/smp_affinity
+	done
+
+	for tx_irq_q4_q7 in 4 5 6 7
+	do
+		tx_irq_num=`grep -m1 edma_eth_tx$tx_irq_q4_q7 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$tx_irq_num" ] && echo 8 > /proc/irq/$tx_irq_num/smp_affinity
+	done
+
+	for tx_irq_q8_q11 in 8 9 10 11
+	do
+		tx_irq_num=`grep -m1 edma_eth_tx$tx_irq_q8_q11 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$tx_irq_num" ] && echo 1 > /proc/irq/$tx_irq_num/smp_affinity
+	done
+
+	for tx_irq_q12_q15 in 12 13 14 15
+	do
+		tx_irq_num=`grep -m1 edma_eth_tx$tx_irq_q12_q15 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$tx_irq_num" ] && echo 2 > /proc/irq/$tx_irq_num/smp_affinity
+	done
+
+        for rx_irq_q0_q1 in 0 1
+	do
+		rx_irq_num=`grep -m1 edma_eth_rx$rx_irq_q0_q1 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$rx_irq_num" ] && echo 1 > /proc/irq/$rx_irq_num/smp_affinity
+	done
+
+	for rx_irq_q2_q3 in 2 3
+	do
+		rx_irq_num=`grep -m1 edma_eth_rx$rx_irq_q2_q3 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$rx_irq_num" ] && echo 2 > /proc/irq/$rx_irq_num/smp_affinity
+	done
+
+        for rx_irq_q4_q5 in 4 5
+        do
+		rx_irq_num=`grep -m1 edma_eth_rx$rx_irq_q4_q5 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$rx_irq_num" ] && echo 4 > /proc/irq/$rx_irq_num/smp_affinity
+	done
+
+	for rx_irq_q6_q7 in 6 7
+	do
+		rx_irq_num=`grep -m1 edma_eth_rx$rx_irq_q6_q7 /proc/interrupts | cut -d ':' -f 1 | tail -n1 | tr -d ' '`
+			[ -n "$rx_irq_num" ] && echo 8 > /proc/irq/$rx_irq_num/smp_affinity
+	done
+
+	for eth_interface in 0 1
+	do
+		for tx_queue in 0 1 2 3
+		do
+			val=$(( 2 ** $tx_queue))
+			echo $val > /sys/class/net/eth$eth_interface/queues/tx-$tx_queue/xps_cpus
+		done
+	done
+
+	for eth_interface in 0 1
+	do
+		for rx_queue in 0 1 2 3
+		do
+			echo 256 > /sys/class/net/eth$eth_interface/queues/rx-$rx_queue/rps_flow_cnt
+		done
+
+	done
+
+	echo 1024 > /proc/sys/net/core/rps_sock_flow_entries
+
+    # should be at the end
+    /sbin/ethtool -K eth0 gro off
+    /sbin/ethtool -K eth1 gro off
+
+}
+
+set_band_steering() {
+    local ADVANCED_MODE="1,2"
+    if [ "`syscfg get wifi::band_steering_supported_modes`" != "$ADVANCED_MODE" ] ; then
+        syscfg set wifi::band_steering_supported_modes $ADVANCED_MODE
+    fi
+}
+
+# create our passwd/shadow/group files
+mkdir -p /tmp/etc/.root
+chmod 711 /tmp/etc/.root
+
+if [ -f "/tmp/etc/.root/passwd" ] ; then chmod 644 /tmp/etc/.root/passwd; else touch /tmp/etc/.root/passwd; chmod 644 /tmp/etc/.root/passwd; fi
+if [ -f "/tmp/etc/.root/shadow" ] ; then chmod 600 /tmp/etc/.root/shadow; else touch /tmp/etc/.root/shadow; chmod 600 /tmp/etc/.root/shadow; fi
+if [ -f "/tmp/etc/.root/group" ] ; then chmod 600 /tmp/etc/.root/group; else touch /tmp/etc/.root/group; chmod 600 /tmp/etc/.root/group; fi
+
+# create the default profile. This is linked to by /etc/profile 
+echo "export setenv PATH=/bin:/sbin:/usr/sbin:/usr/bin:/opt/sbin:/opt/bin" > /tmp/profile
+echo "export setenv LD_LIBRARY_PATH=/lib:/usr/lib:/opt/lib" >> /tmp/profile
+#echo "export setenv LD_LIBRARY_PATH=/lib:/usr/lib:/opt/lib:/usr/local/lib/lua/5.1/" >> /tmp/profile
+
+# create other files that are linked to by etc
+mkdir -p /tmp/udev/rules.d
+echo -n > /tmp/hosts
+echo -n > /tmp/hostname
+echo -n > /tmp/resolv.conf
+echo -n > /tmp/igmpproxy.conf
+echo -n > /tmp/ez-ipupdate.conf
+echo -n > /tmp/ez-ipupdate.out
+echo -n > /tmp/TZ
+echo -n > /tmp/.htpasswd
+echo -n > /tmp/dnsmasq.conf
+echo -n > /tmp/dhcp_options
+echo -n > /tmp/dhcp_static_hosts
+echo -n > /tmp/dnsmasq.leases
+echo -n > /tmp/zebra.conf
+echo -n > /tmp/ripd.conf
+echo -n > /tmp/dhcp6c.conf
+
+# SYSTEM TUNING
+# reserve 8Mb RAM for kernel
+echo 8192 > /proc/sys/vm/min_free_kbytes
+###########################################################################
+#  2. Create syscfg and set the default configuration ( this should be 
+#     cleaned up )
+###########################################################################
+# We'd nomally use /var/lib as the mount point for persistent
+# application data.  But /var/lib is already being used for
+# non-persistent application data (e.g. /var/lib/tc).  So, we fall
+# back to using /mnt/lib.
+APPLICATION_DIR=/var/config
+SYSCFG_DIR=${APPLICATION_DIR}/syscfg
+SYSCFG_FILE=${SYSCFG_DIR}/syscfg.dat
+SYSCFG_RESET="0"
+
+PERSISTENT_PARTITION=$(awk -F: '/syscfg/ { print $1 }' /proc/mtd)
+if [ -z $PERSISTENT_PARTITION ]; then
+    echo [utopia][init] Cannot find syscfg partition, assuming /dev/$PERSISTENT_PARTITION
+fi
+MTD_DEVICE=/dev/${PERSISTENT_PARTITION}
+MTD_BLOCK_DEVICE=/dev/$(echo ${PERSISTENT_PARTITION} | sed s/mtd/mtdblock/)
+MTD_NUM="`echo -n $PERSISTENT_PARTITION | sed 's/mtd//g'`"
+mounted=0
+mkdir -p ${APPLICATION_DIR} || echo [utopia][init] No mount point for persistent storage.
+
+echo "Attempting mount of ubifs syscfg partition"
+UBIDEV=1 #if not using UBI block, set to 0, else 1
+
+# suggested change by Roger at MediaTek to ensure that /dev/ubi_ctrl is available 
+# prior to calling ubiattach
+# mdev -s
+if [ ! -e "/dev/ubi_ctrl" ] ; then
+	mknod /dev/ubi_ctrl c 10 62
+fi
+
+# echo "ubiattach /dev/ubi_ctrl -m ${MTD_NUM} -d ${UBIDEV}" >> /dev/console
+ubiattach /dev/ubi_ctrl -m ${MTD_NUM} -d ${UBIDEV}
+
+#if mount -t jffs2 $MTD_BLOCK_DEVICE ${APPLICATION_DIR}; then
+if mount -o sync -t ubifs ubi${UBIDEV}_0 ${APPLICATION_DIR}; then
+    mounted=1
+else
+    echo [utopia][init] Persistent storage mount failed, attempting format
+    
+#     echo [utopia][init] Backing up syscfg partition to /tmp/mtd${MTD_NUM}_corrupt
+#     dd if=/dev/${MTD_NUM} of=/tmp/mtd${MTD_NUM}_corrupt
+#     echo [utopia][init] Backing up syscfg partition to /tmp/mtd${MTD_NUM}_corrupt DONE!
+    
+    tmp=$(mktemp -t -d)
+    mkdir -p ${tmp}/syscfg
+    
+    echo "erasing flash partition $MTD_DEVICE"
+    # flash_erase ${MTD_DEVICE} 0 0
+    # change suggested by Adam to get ubifs commands working from uboot
+    ubidetach /dev/ubi_ctrl -m ${MTD_NUM}
+    flash_erase -N ${MTD_DEVICE} 0 0
+    ubiformat -y ${MTD_DEVICE}
+    echo "ubiattach /dev/ubi_ctrl -m ${MTD_NUM}"
+		ubiattach /dev/ubi_ctrl -m ${MTD_NUM}
+    
+    echo "trying to create ubi volume"
+    if ! ubimkvol /dev/ubi${UBIDEV} -N syscfg -m; then
+	echo [utopia][init] Format persistent storage failed.  Perhaps ubimkvol not installed.  Giving up.
+    else
+	if ! mount -o sync -t ubifs ubi${UBIDEV}_0 ${APPLICATION_DIR}; then
+	    echo [utopia][init] Format succeeded, mount still failed.  Giving up.
+	else
+	    mounted=1
+	fi
+    fi
+    rm -rf ${tmp}
+    SYSCFG_RESET="1"
+fi
+
+if [ ${mounted} -ne 0 ]; then
+    [ -d ${SYSCFG_DIR} ] || mkdir -p ${SYSCFG_DIR}
+    syscfg_create -f ${SYSCFG_FILE}
+    echo [utopia][init] Using persistent syscfg data from ${SYSCFG_DIR}
+else
+    echo [utopia][init] Using raw partition ${MTD_DEVICE} for syscfg data
+    syscfg_check -d $MTD_DEVICE
+    if [ $? = 0 ]; then
+	echo "[utopia][init] Starting syscfg subsystem using flash partition $MTD_DEVICE"
+	/sbin/syscfg_create -d $MTD_DEVICE
+    else
+	echo "[utopia][init] Formating flash partition $MTD_DEVICE for syscfg use"
+	syscfg_format -d $MTD_DEVICE
+	if [ $? = 0 ]; then
+	    echo "[utopia][init] Starting syscfg subsystem using flash partition $MTD_DEVICE with default settings"
+	    /sbin/syscfg_create -d $MTD_DEVICE
+	else
+	    echo "[utopia][init] FAILURE: formatting flash partition $MTD_DEVICE for syscfg use"
+	    echo "[utopia][init] Starting syscfg with default settings using file store (/tmp/syscfg.db)"
+	    echo "" > /tmp/syscfg.db
+	    /sbin/syscfg_create -f /tmp/syscfg.db
+	fi
+    fi
+fi
+#start hotplug2 before QCA driver loading. Could possibly handle by udev
+
+init_hotplug2
+echo "[utopia][init] Starting system logging"
+/etc/init.d/service_syslog.sh syslog-start
+
+echo "[utopia][init] Starting sysevent subsystem"
+if [ -f /usr/sbin/start_syseventd.sh ];then
+        /usr/sbin/start_syseventd.sh
+else
+        /sbin/syseventd
+fi
+
+# set flag to show that syscfg was reset
+if [ "$SYSCFG_RESET" == "1" ] ; then
+	sysevent set notify_that_syscfg_was_reset 1
+fi
+
+# load kernel modules to handle FTP PORT command
+MODULE_PATH=/lib/modules/`uname -r`/
+# Load ssdk.ko for QCA platform
+if [ -f $MODULE_PATH/qca-ssdk.ko ] ; then
+    /sbin/modprobe qca-ssdk
+fi
+#load QCA NSS and GMAC drivers
+echo "[utopia][init] Enabling DesignWare USB3 DRD Core drivers"
+/sbin/modprobe phy-qca-baldur
+/sbin/modprobe phy-qca-uniphy
+/sbin/modprobe phy-qcom-hsusb
+/sbin/modprobe phy-qcom-ssusb
+/sbin/modprobe dwc3-ipq40xx
+/sbin/modprobe dwc3-qcom
+/sbin/modprobe dwc3
+/sbin/modprobe xhci-hcd
+/sbin/modprobe ehci-hcd
+echo "[utopia][init] Loading QCA Ethernet, NSS and GMAC drivers"
+/sbin/modprobe essedma
+/sbin/modprobe nat46
+/sbin/modprobe qca-nss-drv
+/sbin/modprobe qca-nss-gmac 
+/sbin/modprobe qca-nss-tun6rd
+/sbin/modprobe qca-nss-tunipip6
+/sbin/modprobe qca-nss-qdisc
+/sbin/modprobe qca-nss-ipsecmgr
+/sbin/modprobe qca-nss-macsec
+/sbin/modprobe qca-nss-crypto
+/sbin/modprobe qca-nss-crypto_tool
+/sbin/modprobe qca-nss-cfi-ocf
+/sbin/modprobe qca-nss-cfi-cryptoapi
+/sbin/modprobe qca-mcs
+/sbin/modprobe qrfs
+
+/sbin/modprobe nf_conntrack_ftp
+/sbin/modprobe nf_nat_ftp
+
+qca_edma_smp_affinity
+
+sysctl -w net.netfilter.nf_conntrack_acct=1
+
+# load the watchdog module and start the watchdog program
+# insmod $MODULE_PATH/mod_wdtutil.ko
+# /bin/mknod /dev/watchdog c $(awk ' /wdtutil/{ print $1 }' /proc/devices) 1
+# /usr/sbin/wdtutil -c 16 -i 5
+# echo "watchdog running"
+
+# we want plugged in usb devices to propagate events to sysevent
+echo "[utopia][init] Late loading usb drivers"
+#/sbin/modprobe nls_base
+/sbin/modprobe sd_mod
+#/sbin/modprobe usb_storage
+/sbin/modprobe vfat
+#/sbin/modprobe ntfs
+
+mknod /dev/gpio c 252 0
+mknod /dev/rdm0 c 253 0
+
+echo "[utopia][init] Setting any unset system values to default"
+apply_system_defaults
+
+set_band_steering
+
+# RAINIER-5849 is fixed by moving vconfig to immediately after the Ethernet
+# driver in the wait script. This is a Broadcom only issue.
+if [ -f /usr/sbin/vlan_setup.sh ]; then
+        /usr/sbin/vlan_setup.sh
+        # To maintain compatibility with service_interface we manually set vlan2-status started
+        sysevent set vlan2-status started
+fi
+
+INIT_DIR=/etc/registration.d
+# run all executables in the sysevent registration directory
+# echo "[utopia][init] Running registration using $INIT_DIR"
+execute_dir $INIT_DIR
+
+# Load bdutil daemon
+lsmod | grep mod_bdutil 2>&1 > /dev/null
+#if [ $? -eq 0 ]; then
+#        echo "[utopia][init] Starting bdutil daemon" > /dev/console
+#        /usr/sbin/bdutil &
+#fi
+
+# This is an entry point where developers can quickly add test scripts
+# that will be run after boot up
+if [ -d "/var/config/run_scripts" ] ; then
+	echo "running scripts in /var/config/run_script directory !!!" >> /dev/console
+	execute_dir "/var/config/run_scripts" &
+fi
+
+# The code below attempts to sync up the current admin password ( which may have
+# been changed, with the admin http_auth password for the sysinfo.cgi file. 
+# Matt Fatheree appologizes in advance for this spaghetti code.
+# BEWARE: here there be dragons
+if [ ! -f "/var/config/.sysinfo_pswd" ] ; then
+	if [ -f "/var/config/syspwl.lst" ] ; then
+		# if there is an admin password already set try to use that
+		ADMPASS="`cat /var/config/syspwl.lst  | grep 1000 | cut -d':' -f2`"
+		echo "admin:$ADMPASS" > /var/config/.sysinfo_pswd
+	else
+		echo "admin:admin" > /var/config/.sysinfo_pswd
+	fi
+else
+  # this is a case for when someone has changed the admin passwd
+  # before they had code that supported protecting sysinfo.cgi
+  # in that case the sysinfo_pswd exists, but has the default admin:admin
+  # password combination.  In that case, we basically do what we did above, but 
+  # recreate the sysinfo_pswd file 
+	if [ -f "/var/config/syspwl.lst" ] ; then
+	# quick hack to sync up sysinfo passwords
+	  echo "attempting to sync sysinfo.cgi auth credentials" >> /dev/console
+		ORGPASS="`cat /var/config/.sysinfo_pswd | grep admin | cut -d':' -f2`"
+		ADMPASS="`cat /var/config/syspwl.lst  | grep 1000 | cut -d':' -f2`"
+		if [ "$ORGPASS" != "$ADMPASS" ] ; then
+		  echo "sync sysinfo.cgi auth credentials from syspwl.lst" >> /dev/console
+			echo "admin:$ADMPASS" > /var/config/.sysinfo_pswd
+		fi
+	else
+		echo "admin:admin" > /var/config/.sysinfo_pswd
+	fi
+fi
+echo "[utopia][init] Loading Buttons drivers"
+/sbin/modprobe button-hotplug
+killall -q hotplug2
+wait
+#QCA driver will load cal data from /tmp. Cannot be any other directory
+calpart=`grep "0:ART" /proc/mtd | awk -F: '{print $1}'`
+if [ "$calpart" != "" ]; then
+    echo "[utopia][init] Load WiFi cal data from MTD("$calpart") to FS."
+    dd if=/dev/$calpart of=/tmp/wifi0.caldata bs=32 count=377 skip=128 &>/dev/null
+    dd if=/dev/$calpart of=/tmp/wifi1.caldata bs=32 count=377 skip=640 &>/dev/null
+    dd if=/dev/$calpart of=/tmp/wifi2.caldata bs=32 count=377 skip=1152 &>/dev/null
+fi    
+#restart run-time hotplug2 for buttons handler
+[ -x /sbin/hotplug2 ] && /sbin/hotplug2 --override --persistent \
+		--set-rules-file /etc/hotplug2.rules \
+		--set-coldplug-cmd /sbin/udevtrigger \
+		--max-children 1 >/dev/null 2>&1 &
+
+#Create wifi f/w directory and copy all files there to this place
+#so that wifi devices can load its firmware and board data file when
+#special files are needed for specific region.
+HW_VERSION=`skuapi -g hw_revision | cut -d'=' -f2 | tr -d ' '`
+REGION=`skuapi -g cert_region | cut -d'=' -f2 | tr -d ' '`
+echo "[utopia][init] Setup link to WiFi firmware and board data ($REGION)"
+if [ ! -d /tmp/IPQ4019 ]; then 
+    mkdir /tmp/IPQ4019
+    cp -r /lib/firmware/IPQ4019/hw_1 /tmp/IPQ4019/hw.1
+fi
+if [ ! -d /tmp/QCA9888 ]; then 
+    mkdir /tmp/QCA9888
+    cp -r /lib/firmware/QCA9888/hw_2 /tmp/QCA9888/hw.2
+fi
+#Override with default FCC data
+if [ $HW_VERSION = "1.1" ] ; then
+	cp /lib/firmware/IPQ4019/FCC1.1/* /tmp/IPQ4019/hw.1
+	cp /lib/firmware/QCA9888/FCC1.1/* /tmp/QCA9888/hw.2
+else
+	cp /lib/firmware/IPQ4019/FCC/* /tmp/IPQ4019/hw.1
+	cp /lib/firmware/QCA9888/FCC/* /tmp/QCA9888/hw.2
+fi
+#If detects region other then US(FCC), use those date instead.
+if [ "$REGION" = "CA" ]; then
+    echo "[utopia][init] Using CA region for WiFi firmware and board data"
+    if [ $HW_VERSION = "1.1" ] ; then
+	    cp /lib/firmware/IPQ4019/IC1.1/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/IC1.1/* /tmp/QCA9888/hw.2
+    else
+	    cp /lib/firmware/IPQ4019/IC/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/IC/* /tmp/QCA9888/hw.2
+    fi
+elif [ "$REGION" = "AU" ]; then
+    echo "[utopia][init] Using AU region for WiFi firmware and board data"
+    cp /lib/firmware/IPQ4019/AU/* /tmp/IPQ4019/hw.1
+    cp /lib/firmware/QCA9888/AU/* /tmp/QCA9888/hw.2
+elif [ "$REGION" = "AH" ]; then
+    echo "[utopia][init] Using AH region for WiFi firmware and board data"
+    cp /lib/firmware/IPQ4019/AH/* /tmp/IPQ4019/hw.1
+    cp /lib/firmware/QCA9888/AH/* /tmp/QCA9888/hw.2
+elif [ "$REGION" = "AP" ]; then
+    echo "[utopia][init] Using AP region for WiFi firmware and board data"
+    cp /lib/firmware/IPQ4019/AP/* /tmp/IPQ4019/hw.1
+    cp /lib/firmware/QCA9888/AP/* /tmp/QCA9888/hw.2
+elif [ "$REGION" = "EU" ]; then
+    echo "[utopia][init] Using EU region for WiFi firmware and board data"
+    if [ $HW_VERSION = "1.1" ] ; then
+	    cp /lib/firmware/IPQ4019/EU1.1/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/EU1.1/* /tmp/QCA9888/hw.2
+    else
+	    cp /lib/firmware/IPQ4019/EU/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/EU/* /tmp/QCA9888/hw.2
+    fi
+elif [ "$REGION" = "ME" ]; then
+    echo "[utopia][init] Using EU region for WiFi firmware and board data"
+    if [ $HW_VERSION = "1.1" ] ; then
+	    cp /lib/firmware/IPQ4019/EU1.1/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/EU1.1/* /tmp/QCA9888/hw.2
+    else
+	    cp /lib/firmware/IPQ4019/EU/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/EU/* /tmp/QCA9888/hw.2
+    fi
+elif [ "$REGION" = "HK" ]; then
+    echo "[utopia][init] Using HK region for WiFi firmware and board data"
+    if [ $HW_VERSION = "1.1" ] ; then
+	    cp /lib/firmware/IPQ4019/HK1.1/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/HK1.1/* /tmp/QCA9888/hw.2
+    else
+	    cp /lib/firmware/IPQ4019/HK/* /tmp/IPQ4019/hw.1
+	    cp /lib/firmware/QCA9888/HK/* /tmp/QCA9888/hw.2
+    fi
+elif [ "$REGION" = "PH" ]; then
+    echo "[utopia][init] Using PH region for WiFi firmware and board data"
+    cp /lib/firmware/IPQ4019/PH/* /tmp/IPQ4019/hw.1
+    cp /lib/firmware/QCA9888/PH/* /tmp/QCA9888/hw.2
+fi
+#start NSS RPS
+if [ -e /etc/init.d/qca-nss-drv ]; then
+    /etc/init.d/qca-nss-drv start autoscaling-disable
+fi
+if [ -f /etc/sysctl.d/qca-nss-drv.conf ]; then
+    sysctl -p /etc/sysctl.d/qca-nss-drv.conf
+fi
+# ECM start, sysctl also call in service_system script
+/sbin/modprobe bonding
+/sbin/modprobe ecm
+#echo "inserting fpbypass"
+if [ "`syscfg get fastpath_support`" == "1" ] ; then
+  if [ "`syscfg get ctf_support`" == "1" ] && [ -e $MODULE_PATH/ctf.ko ] ; then
+	echo "inserting ctf.ko for broadcom"
+	insmod $MODULE_PATH/ctf.ko
+  elif [ "`syscfg get nss_support`" == "1" ] && [ -e $MODULE_PATH/ecm.ko ] ; then
+	echo "inserting fpbypass.ko for QCA"
+	insmod $MODULE_PATH/fpbypass.ko
+  else 
+	echo "error when inserting fpbypass"
+  fi
+fi
+# set up kernel panic logging if needed. 
+if [ -e /etc/init.d/setup_kpaniclog.sh ]; then
+    /etc/init.d/setup_kpaniclog.sh 
+fi
+
+
+# NODES-2358
+ethtool -K eth0 tso off
+ethtool -K eth1 tso off
+
+# Change guest access auth port to 11161 (Ref. OLYMPUS-154)
+# Some clients unable to get redirect to guest captive portal for authentication
+if [ "$(syscfg get guest_auth_port)" != "11161" ]; then
+    echo "[utopia][init] Setting guest access auth port to 11161" >> /dev/console
+    syscfg set guest_auth_port 11161
+    syscfg commit
+fi

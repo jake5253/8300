@@ -1,0 +1,14 @@
+prefix=/hudson/build/dallas/output/production/ffmpeg/install/
+exec_prefix=${prefix}
+libdir=/hudson/build/dallas/output/production/ffmpeg/install/lib
+includedir=/hudson/build/dallas/output/production/ffmpeg/install/include
+
+Name: libavformat
+Description: FFmpeg container format library
+Version: 56.36.100
+Requires: 
+Requires.private: libavcodec >= 56.41.100, libavutil >= 54.27.100
+Conflicts:
+Libs: -L${libdir}  -lavformat 
+Libs.private: -lm -pthread
+Cflags: -I${includedir}

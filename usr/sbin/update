@@ -1,0 +1,21 @@
+#!/bin/sh
+
+source /usr/sbin/update_defs
+
+
+if [ -z "$1" ]; then
+	usage
+	exit 1
+fi
+
+if [ -e "$1" ]; then
+
+	CheckConfig "$1"
+else
+	GetOptions
+fi
+
+SetPartition
+
+FlashImage
+

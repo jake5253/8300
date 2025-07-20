@@ -1,0 +1,14 @@
+prefix=/hudson/build/dallas/output/production/ffmpeg/install/
+exec_prefix=${prefix}
+libdir=/hudson/build/dallas/output/production/ffmpeg/install/lib
+includedir=/hudson/build/dallas/output/production/ffmpeg/install/include
+
+Name: libswscale
+Description: FFmpeg image rescaling library
+Version: 3.1.101
+Requires: 
+Requires.private: libavutil >= 54.27.100
+Conflicts:
+Libs: -L${libdir}  -lswscale 
+Libs.private: -lm
+Cflags: -I${includedir}
